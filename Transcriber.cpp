@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <cmath>
 #include <sstream>
+#include <string>
 #include <utility>
 
 #include <iostream>
@@ -355,9 +356,9 @@ void Transcriber::find_four_closest(std::vector<cv::Point>& pts) const {
 
 void Transcriber::generate_tabs() {
 	cv::Mat frame;	//	current frame
+	int frame_num = 0;
 
 	cv::VideoCapture capture(video_filename);
-	cv::VideoWriter oWriter;
 	if (!capture.isOpened()) {
 		std::cerr << "Unable to open video file : " << video_filename << "\n";
 		exit(1);
@@ -367,12 +368,6 @@ void Transcriber::generate_tabs() {
 	//	the guitar.
 	if (!capture.read(first_frame)) {
 		std::cerr << "Unable to read the first frame.\nExiting...\n";
-		exit(1);
-	}
-	oWriter.open("out.mp4", capture.get(CV_CAP_PROP_FOURCC),
-				 capture.get(CV_CAP_PROP_FPS), first_frame.size(), true);
-	if (!oWriter.isOpened()) {
-		std::cerr << "Unable to open output video file : " << "out.avi" << "\n";
 		exit(1);
 	}
 
@@ -387,6 +382,7 @@ void Transcriber::generate_tabs() {
 			std::cerr << "Unable to read the next frame.\nExiting...\n";
 			exit(1);
 		}
+		frame_num++;
 		
 		//	Get the point where the template matches.
 		cv::Point matchLoc = get_match_point(frame);
@@ -533,7 +529,10 @@ void Transcriber::generate_tabs() {
 		
 		//	show the current frame.
 		cv::imshow(window_name, frame);
-		oWriter << first_frame;
+		cv::imwrite(std::string("screenshots/screenshot_")
+				+ std::to_string(frame_num)
+				+ std::string(".png"), frame);
+
 		key_input = cv::waitKey(1);
 	}
 
