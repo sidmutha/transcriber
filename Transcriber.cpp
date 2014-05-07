@@ -34,8 +34,6 @@
 
 #define CHOP_SLACK 0.075
 
-double fno, frame_number;
-
 struct LineUpComparer {
 	bool operator() (cv::Vec4i a, cv::Vec4i b) {
 		int y1a = a[1] < a[3] ? a[1] : a[3];
@@ -59,12 +57,6 @@ struct ContourAreaComparer {
 	}
 } cont_comp;
 
-void write_img(std::string title, cv::Mat img){
-	std::string str;
-	std::stringstream ss;
-	//ss <<  "./dump/frame" <<  frame_number << "_" << title << ".jpg";
-	//cv::imwrite(ss.str(), img);
-}
 class Transcriber {
 	private:
 	const std::string video_filename;
@@ -119,9 +111,6 @@ Transcriber::Transcriber(const char *filename, const unsigned strings)
 		output.push_back("");
 	}
 	cv::namedWindow(window_name);
-	//cv::namedWindow(alt_window_name);
-	cv::namedWindow("lineTemplate");
-	cv::namedWindow("li");
 }
 
 Transcriber::~Transcriber() {
@@ -168,7 +157,6 @@ void Transcriber::guitar_roi_callback(int event, int x, int y, int d,
 						  cv::Scalar(255, 0, 0));
 			std::cout << "Showing selected region\n";
 			cv::imshow(t -> window_name, t -> first_frame);
-			write_img("selection", t->first_frame);
 			cv::waitKey(5000);
 			break;
 		default: break;
@@ -369,6 +357,7 @@ void Transcriber::generate_tabs() {
 	cv::Mat frame;	//	current frame
 
 	cv::VideoCapture capture(video_filename);
+	cv::VideoWriter oWriter;
 	if (!capture.isOpened()) {
 		std::cerr << "Unable to open video file : " << video_filename << "\n";
 		exit(1);
@@ -380,6 +369,13 @@ void Transcriber::generate_tabs() {
 		std::cerr << "Unable to read the first frame.\nExiting...\n";
 		exit(1);
 	}
+	oWriter.open("out.mp4", capture.get(CV_CAP_PROP_FOURCC),
+				 capture.get(CV_CAP_PROP_FPS), first_frame.size(), true);
+	if (!oWriter.isOpened()) {
+		std::cerr << "Unable to open output video file : " << "out.avi" << "\n";
+		exit(1);
+	}
+
 	get_guitar_box();
 	
 	char key_input = 0;
@@ -392,8 +388,6 @@ void Transcriber::generate_tabs() {
 			exit(1);
 		}
 		
-		frame_number = capture.get(CV_CAP_PROP_POS_FRAMES);
-		std::cout << frame_number << "\n";
 		//	Get the point where the template matches.
 		cv::Point matchLoc = get_match_point(frame);
 		cv::Rect guitar_part(matchLoc.x, matchLoc.y,
@@ -413,14 +407,6 @@ void Transcriber::generate_tabs() {
 		//	Blur it first.
 		// cv::GaussianBlur(frame, frame, cv::Size(3,3), 0);
 		cv::Canny(frame, frame, CANNY_LOW_THRESH, CANNY_HIGH_THRESH, 3);
-		write_img("canny1", frame);
-		/*
-		//	Dilate to reduce some noise. Risky as it also reduces the number
-		//	of lines that the frets provide.
-		 cv::Mat element = cv::getStructuringElement(cv::MORPH_RECT,
-											cv::Size(3,3));
-		 cv::dilate(frame, frame, element);
-		 */
 
 		//	Use the Hough Transform Line Detector to find lines of the
 		//	equation form:
@@ -431,16 +417,7 @@ void Transcriber::generate_tabs() {
 		cv::HoughLinesP(frame, lines, 1, CV_PI / 180,
 						HOUGH_THRESH, HOUGH_MIN_LEN, HOUGH_MAX_GAP);
 
-		//	Remove the lines that Canny put into the image.
-		//frame = cv::Mat::zeros(frame.rows, frame.cols, CV_32FC1);
 		frame = frame_orig;
-
-		/*
-		//	Draw all the Hough-detected lines afresh.
-		for (size_t i = 0; i < lines.size(); ++i) {
-			draw_twopt_line(lines[i], frame);
-		}
-		*/
 
 		//	Partition the lines into bins.
 		std::vector< std::vector<cv::Vec4i> > bins(NUM_BINS);
@@ -456,48 +433,6 @@ void Transcriber::generate_tabs() {
 		int max_bin1, max_bin2;
 		find_two_max_bins(bins, max_size1, max_size2, max_bin1, max_bin2);
 
-		/*
-		std::cout << max_bin1 << ' ' << max_bin2 << '\n';
-		std::cout << max_size1 << ' ' << max_size2
-				  << ' ' << lines.size() << "\n\n";
-		*/
-		
-		/*
-		// converting from Vec4i to Vec2f
-		std::vector<cv::Vec2f> lines2(lines.size());
-		for(size_t i = 0; i < lines.size(); i++){
-			lines2[i][0] = get_r(lines[i]);
-			lines2[i][1] = get_theta(lines[i]);
-		}
-		draw_histogram(lines2);		//	display a theta histogram.
-		*/
-
-		/*
-		//	Draw all the lines from the most frequent bins.
-		//
-		//	First bin.
-		int i = max_size1;
-		cv::Vec4i string, fret;
-		while (i--) {
-			string = bins[max_bin1][i];
-			draw_twopt_line(string, frame);
-		}
-		//	Second bin.
-		i = max_size2;
-		while (i--) {
-			fret = bins[max_bin2][i];
-			draw_twopt_line(fret, frame);
-		}
-		
-		i = bins.size();
-		while(i--){
-			int j = bins[i].size();
-			while(j--){
-				draw_twopt_line(bins[i][j], frame);
-			}	
-		}
-		*/
-
 		//	Rotate the image to make the strings horizontal.
 		cv::Mat rotMatrix = 
 			cv::getRotationMatrix2D(cv::Point(frame.cols/2, frame.rows/2), 
@@ -505,30 +440,23 @@ void Transcriber::generate_tabs() {
 		cv::warpAffine(frame, frame, rotMatrix, frame.size());
 		cv::flip(frame, frame, 1);
 		cv::Mat flipped_orig(frame);
-		write_img("rotate_and_flip", frame);
 		cv::Mat grad_x, abs_grad_x;
 		cv::Sobel(frame, grad_x, CV_16S, 1, 0, 3, 1, 0, cv::BORDER_DEFAULT );
   		cv::convertScaleAbs( grad_x, abs_grad_x );
-		//	Let's go with this for now.
-		// frame = abs_grad_x;	
+
 		//	Threshold to get only the strongest x-gradients.
 		//	Will mostly be frets.
 		cv::threshold(abs_grad_x, abs_grad_x, 128, 255, 0);
 
-		write_img("sobel_and_threshold", abs_grad_x);
 		//	Hough transform to get lines again.
-		//cv::Canny(abs_grad_x, abs_grad_x,
-		//		  CANNY_LOW_THRESH, CANNY_HIGH_THRESH, 3);
 		cv::cvtColor( abs_grad_x,abs_grad_x, CV_BGR2GRAY );
 		
-		// cv::erode(frame, frame, element);
 		std::vector<cv::Vec4i> fretboard_lines;
 		cv::HoughLinesP(abs_grad_x, fretboard_lines, 1, CV_PI / 180,
 						HOUGH_THRESH, HOUGH_MIN_LEN, HOUGH_MAX_GAP);
+
 		float epsilon = 0.2;
 		std::vector<cv::Vec4i> fret_lines;
-		cv::Mat frame_hough; 
-		frame.copyTo(frame_hough);
 		
 		for (size_t i = 0; i < fretboard_lines.size(); ++i) {
 			float t = get_theta(fretboard_lines[i]); 
@@ -538,10 +466,8 @@ void Transcriber::generate_tabs() {
 			}else{
 				draw_twopt_line(fretboard_lines[i], frame);
 			}
-			// std::cout << fret_lines[i] << " " << t << "\n";
-			// std::cout << get_r(fret_lines[i]) << " " << t << "\n\n"; 
-			// draw_twopt_line(fretboard_lines[i], frame);
 		}
+
 		//	Chop off the parts that don't contain the guitar.
 		//	Find the median vertical line.
 		//	It will likely be a fret.
@@ -561,43 +487,6 @@ void Transcriber::generate_tabs() {
 								  		+ (int)( 2 * CHOP_SLACK * frame.rows)),
 							  			frame.rows - y1 - 1));
 		frame = frame(fret_box);
-		frame_hough = frame_hough(fret_box);
-		write_img("fretlines_and_chopping", frame_hough);
-		
-		int lineTemplate_width = 10;
-		cv::Mat lineTemplate = cv::Mat::zeros(fret_box.height, lineTemplate_width, 0);
-		cv::line(lineTemplate, cv::Point(lineTemplate_width/2, 0), cv::Point(lineTemplate_width/2, fret_box.height), cv::Scalar(255, 255, 255),2);
-		
-		abs_grad_x = abs_grad_x(fret_box);
-
-		
-		int result_cols =  abs_grad_x.cols - lineTemplate.cols + 1;
-		int result_rows = abs_grad_x.rows - lineTemplate.rows + 1;
-		cv::Mat result;
-		result.create( result_cols, 20, CV_32FC1 );
-		//std::cout << lineTemplate.type() << " " << abs_grad_x.type() << std::endl;
-			
-		/// Do the Matching and Normalize
-		cv::matchTemplate( abs_grad_x, lineTemplate, result, CV_TM_CCORR_NORMED);
-		cv::normalize( result, result, 0, 1, cv::NORM_MINMAX, -1, cv::Mat() );
-		for(int w = 0; w < result.cols; w++){
-			if(result.at<double>(w, 0) > 1.0){
-				line(abs_grad_x, cv::Point(w + lineTemplate_width/2, 0), cv::Point(w + lineTemplate_width/2, abs_grad_x.rows), cv::Scalar(255, 255, 255));
-			}  
-		}
-		std::cout << result;	
-		std::cout << "--\n";
-		cv::imshow("lineTemplate", result);
-		cv::imshow("li", lineTemplate);	
-
-			
-		/*
-		std::stringstream ss;
-		ss << get_theta(string);
-		std::string str = ss.str();
-		cv::putText(frame, str.c_str(), cv::Point(15, 15),
-            cv::FONT_HERSHEY_SIMPLEX, 0.5 , cv::Scalar(255,255,255));
-		*/
 
 		//	Convert to HSV for skin detection.
 		frame.copyTo(frame_orig);
@@ -607,7 +496,6 @@ void Transcriber::generate_tabs() {
 					cv::Scalar(SKIN_HUE_HIGH, SKIN_SAT_HIGH, SKIN_VAL_HIGH),
 					frame);
 
-		write_img("skin_detection", frame);
 		std::vector< std::vector<cv::Point> > contours;
 		std::vector<cv::Vec4i> hierarchy;
 		
@@ -618,14 +506,10 @@ void Transcriber::generate_tabs() {
 					 CV_RETR_TREE, CV_CHAIN_APPROX_SIMPLE,
 					 cv::Point(0, 0));
 		frame = frame_orig;
-		frame_orig.copyTo(frame_hough);;
 		std::sort(contours.begin(), contours.end(), cont_comp);
 		
 		std::vector <cv::Point> max_y_pts_vec;
 		for( int i = 0; i < contours.size(); i++ ) {
-			// cv::drawContours(frame, contours, i,
-			//				 cv::Scalar(255, 0, 255), 2, 8,
-			//				 hierarchy, 0, cv::Point() );
 			if (max_y_pts_vec.size() == 6) break;
 			
 			 cv::drawContours(frame, contours, i,
@@ -639,47 +523,29 @@ void Transcriber::generate_tabs() {
 					max_y_pt = contours[i][j];
 			}
 
-			/*
-			cv::Moments mu = cv::moments(contours[i], false);
-			int cen_x = mu.m10 / mu.m00;
-			int cen_y = mu.m01 / mu.m00;
-			cv::Scalar pt_color = frame.at<int>(cen_x, cen_y);
-			if ( (pt_color[0] > SKIN_HUE_LOW && pt_color[0] < SKIN_HUE_HIGH)
-			  && (pt_color[1] > SKIN_SAT_LOW && pt_color[1] < SKIN_SAT_HIGH)
-			  && (pt_color[2] > SKIN_VAL_LOW && pt_color[2] < SKIN_VAL_HIGH)){
-				max_y_pts_vec.push_back(max_y_pt);
-			}
-			*/
 			max_y_pts_vec.push_back(max_y_pt);
 		}
 
-		write_img("top_six_contours", frame);
-
 		find_four_closest(max_y_pts_vec);
 		for( int i = 0; i < 4; i++ ) {
-			//cv::drawContours(frame, contours, i,
-			//				 cv::Scalar(255, 0, 255), 2, 8,
-			//				 hierarchy, 0, cv::Point() );
 			cv::circle(frame, max_y_pts_vec[i], 4, cv::Scalar(0, 255, 255), -1);
 		}
 		
 		//	show the current frame.
-		cv::imshow(window_name, abs_grad_x);
-		write_img("final", frame);
-		write_img("final_dev", frame_hough);
-		key_input = cv::waitKey(10); //!!!
-	} // !!!
+		cv::imshow(window_name, frame);
+		oWriter << first_frame;
+		key_input = cv::waitKey(1);
+	}
 
 	capture.release();
 }
 
 int main(int argc, char **argv) {
-	if (argc != 4) {
+	if (argc != 3) {
 		std::cerr << "usage : <binary> <filename> <num_strings>\n.";
 		std::cerr << "Exiting...\n";
 		return -1;
 	}
-	fno = (double)atoi(argv[3]);
 	Transcriber t(argv[1], atoi(argv[2]));
 	t.generate_tabs();
 }
